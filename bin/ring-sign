@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import random
 import tarfile
 
-import click
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
 from pyring.sc25519 import Scalar
 from pyring.ge import Point
-from pyring.one_time import PrivateKey, ring_sign
-from pyring.serialize import export_pem
+from pyring.one_time import PrivateKey, ring_sign, within_ring_sign
+from pyring.serialize import export_ring_pem, export_within_ring_pem
 
 
 def _cryptography_to_scalar(private_key):
@@ -43,12 +43,6 @@ def _cryptography_to_point(public_key):
     )
 
 
-@click.command()
-@click.argument("message", type=click.File("rb"))
-@click.argument("private-key-file", type=click.File("rb"))
-@click.argument("public-keys-files", nargs=-1, type=click.File("rb"))
-@click.option("--password", default=None,
-              help="Optional password to decrypt private key.")
 def sign(message, private_key_file, public_keys_files, password):
     """Generate a one-time ring signature.
 
@@ -88,18 +82,52 @@ def sign(message, private_key_file, public_keys_files, password):
     public_keys = [_cryptography_to_point(pk) for pk in public_keys]
     if signer_public_key not in public_keys:
         print("noooo")
-        raise click.UsageError("your public key was not found")
 
     # Shuffle the public keys
     random.SystemRandom().shuffle(public_keys)
     signer_index = public_keys.index(signer_public_key)
 
+    return public_keys, signer_private_key, signer_index
+
+
+def do_ring_sign(message, private_key_file, public_keys_files, password):
+    public_keys, signer_private_key, signer_index = sign(message, private_key_file, public_keys_files, password)
+
     # Convert the keys into scalars/points and sign the message
     signature = ring_sign(message, public_keys, signer_private_key, signer_index)
 
     # Serialize the ring signature
-    click.echo(export_pem(signature))
+    print(export_ring_pem(signature))
+
+
+def do_within_ring_sign(message, private_key_file, public_keys_files, password):
+    public_keys, signer_private_key, signer_index = sign(message, private_key_file, public_keys_files, password)
+
+    # Convert the keys into scalars/points and sign the message
+    signature = within_ring_sign(message, public_keys, signer_private_key, signer_index)
+
+    # Serialize the ring signature
+    print(export_within_ring_pem(signature))
 
 
 if __name__ == "__main__":
-    sign()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('message')
+    parser.add_argument('private_key')
+    parser.add_argument('public_keys', nargs='+')
+    parser.add_argument('--within_ring', action='store_true')
+    args = parser.parse_args()
+
+    message = open(args.message, 'rb')
+    private_key = open(args.private_key, 'rb')
+    public_keys = [open(public_key, 'rb') for public_key in args.public_keys]
+
+    if args.within_ring:
+	    do_within_ring_sign(message, private_key, public_keys, None)
+    else:
+	    do_ring_sign(message, private_key, public_keys, None)
+
+    message.close()
+    private_key.close()
+    for public_key in public_keys:
+	    public_key.close()

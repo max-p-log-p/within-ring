@@ -72,7 +72,22 @@ class RingSignature:
     r: List[Scalar]
 
 
-def ring_sign(
+@dataclasses.dataclass(frozen=True)
+class WithinRingSignature:
+    """A within ring signature.
+
+    A within ring signature consists of the public keys the message was signed against, the
+    encrypted key images of the signer's public key, and the two rings.
+    """
+
+    public_keys: List[Point]
+    public_points: List[Point]
+    enc_points: List[Point]
+    c: List[Scalar]
+    r: List[Scalar]
+
+
+def sign(
     message: ByteString, public_keys: List[Point], private_key: Scalar, key_index: int
 ) -> RingSignature:
     """Sign the given message.
@@ -119,8 +134,28 @@ def ring_sign(
     c.insert(s, H_s(buffer_) - functools.reduce(operator.add, c))
     r.insert(s, q_s - c[s] * x)
 
+    return (public_keys, I, c, r)
+
+def ring_sign(
+    message: ByteString, public_keys: List[Point], private_key: Scalar, key_index: int
+) -> RingSignature:
+    public_keys, I, c, r = sign(message, public_keys, private_key, key_index)
     return RingSignature(public_keys, I, c, r)
 
+def within_ring_sign(
+    message: ByteString, public_keys: List[Point], private_key: Scalar, key_index: int
+) -> RingSignature:
+    public_keys, I, c, r = sign(message, public_keys, private_key, key_index)
+
+    public_points = []
+    enc_points = []
+    for public_key in public_keys:
+        r_i = Scalar.random()
+        shared_secret = r_i * public_key
+        public = r_i * G
+        public_points.append(public)
+        enc_points.append(shared_secret + I)
+    return WithinRingSignature(public_keys, public_points, enc_points, c, r)
 
 def ring_verify(message: ByteString, signature: RingSignature) -> bool:
     """Verify that a signature is valid for the given message.
@@ -142,3 +177,12 @@ def ring_verify(message: ByteString, signature: RingSignature) -> bool:
         buffer_ += (r_i * H_p(P_i) + c_i * I).as_bytes()
 
     return H_s(buffer_) - functools.reduce(operator.add, c) == 0
+
+def within_ring_verify(message: ByteString, signature: WithinRingSignature, private_key: Scalar) -> bool:
+    index = signature.public_keys.index(PrivateKey(private_key).public_key().point)
+    public_point = signature.public_points[index]
+    enc_point = signature.enc_points[index]
+    shared_secret = private_key * public_point
+    key_image = enc_point - shared_secret
+    ring_signature = RingSignature(signature.public_keys, key_image, signature.c, signature.r)
+    return ring_verify(message, ring_signature)

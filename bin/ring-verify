@@ -12,16 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import click
-
-from pyring.one_time import ring_verify
+import argparse
+from pyring.one_time import ring_verify, within_ring_verify
 from pyring.serialize import import_pem
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+from pyring.sc25519 import Scalar
 
+def _cryptography_to_scalar(private_key):
+    return Scalar(
+        private_key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+    )
 
-@click.command()
-@click.argument("message", type=click.File("rb"))
-@click.argument("ring-signature-file", type=click.File("r"))
-def verify(message, ring_signature_file):
+def verify(message, ring_signature_file, within_ring, private_key_file=None):
     """Verify a one-time ring signature of a given file."""
     # Load the message
     message = message.read()
@@ -30,11 +37,33 @@ def verify(message, ring_signature_file):
     ring_signature = import_pem(ring_signature_file.read())
 
     # Verify the ring signature
-    if ring_verify(message, ring_signature):
-        click.echo("Valid ring signature.")
+    if within_ring:
+        private_key = serialization.load_pem_private_key(
+            private_key_file.read(), None, default_backend()
+        )
+        within_ring_verify(message, ring_signature, _cryptography_to_scalar(private_key))
+        print("Valid ring signature.")
+    elif not within_ring and ring_verify(message, ring_signature):
+        print("Valid ring signature.")
     else:
-        click.echo("Invalid ring signature.")
-
+        print("Invalid ring signature.")
 
 if __name__ == "__main__":
-    verify()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('message')
+    parser.add_argument('ring_signature')
+    parser.add_argument('--private_key', required=False)
+    parser.add_argument('--within_ring', action='store_true')
+    args = parser.parse_args()
+
+    message = open(args.message, 'rb')
+    ring_signature = open(args.ring_signature, 'r')
+
+    private_key = None
+    if args.private_key:
+	    private_key = open(args.private_key, 'rb')
+
+    verify(message, ring_signature, args.within_ring, private_key)
+
+    message.close()
+    ring_signature.close()
